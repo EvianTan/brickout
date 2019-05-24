@@ -1,159 +1,316 @@
-#include <gtk/gtk.h>
 #include <epoxy/gl.h>
 #include <epoxy/glx.h>
+#include <gtk/gtk.h>
+#include <math.h>
+#include "DashGL/dashgl.h"
+
+#define WIDTH 640.0f
+#define HEIGHT 480.0f
 
 static void on_realize(GtkGLArea *area);
 static void on_render(GtkGLArea *area, GdkGLContext *context);
+static gboolean on_idle(gpointer data);
+static gboolean on_keydown(GtkWidget *widget, GdkEventKey *event);
+static gboolean on_keyup(GtkWidget *widget, GdkEventKey *event);
+
+struct {
+	float dx, dy;
+	vec3 pos;
+	vec3 color;
+	mat4 mvp;
+	GLuint vbo;
+} ball;
+
+struct {
+	float dx;
+	vec3 pos;
+	vec3 color;
+	mat4 mvp;
+	GLuint vbo;
+	gboolean key_left;
+	gboolean key_right;
+} paddle;
 
 GLuint program;
-GLuint vao, vbo_triangle;
+GLuint vao;
 GLint attribute_coord2d;
+GLint uniform_mvp, uniform_color;
 
-// -----------------------------------------------------------------------------
-// FUNCTION main()
-// -----------------------------------------------------------------------------
-int main(int argc, char* argv[])
-{
-    GtkWidget *window;
-    GtkWidget *glArea;
+int main(int argc, char *argv[]) {
 
-    gtk_init(&argc, &argv);
+	GtkWidget *window;
+	GtkWidget *glArea;
 
-    // Initialize window
-    window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(window), "Game : Brickout");
-    gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
-    gtk_window_set_default_size(GTK_WINDOW(window), 640, 480);
-    gtk_window_set_type_hint(GTK_WINDOW(window), GDK_WINDOW_TYPE_HINT_UTILITY);
-    g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+	gtk_init(&argc, &argv);
 
-    // Initialize GTK GL Area
-    glArea = gtk_gl_area_new();
-    gtk_widget_set_vexpand(glArea, TRUE);
-    gtk_widget_set_hexpand(glArea, TRUE);
-    g_signal_connect(glArea, "realize", G_CALLBACK(on_realize), NULL);
-    g_signal_connect(glArea, "render", G_CALLBACK(on_render), NULL);
-    gtk_container_add(GTK_CONTAINER(window), glArea);
+	// Initialize Window
 
-    // Show widgets
-    gtk_widget_show_all(window);
-    gtk_main();
+	window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+	gtk_window_set_title(GTK_WINDOW(window), "Brickout Tutorial");
+	gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
+	gtk_window_set_default_size(GTK_WINDOW(window), 640, 480);
+	gtk_window_set_type_hint(GTK_WINDOW(window), GDK_WINDOW_TYPE_HINT_UTILITY);
+	g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+	g_signal_connect(window, "key-press-event", G_CALLBACK(on_keydown), NULL);
+	g_signal_connect(window, "key-release-event", G_CALLBACK(on_keyup), NULL);
 
-    return 0;
+	// Initialize GTK GL Area
+
+	glArea = gtk_gl_area_new();
+	gtk_widget_set_vexpand(glArea, TRUE);
+	gtk_widget_set_hexpand(glArea, TRUE);
+	g_signal_connect(glArea, "realize", G_CALLBACK(on_realize), NULL);
+	g_signal_connect(glArea, "render", G_CALLBACK(on_render), NULL);
+	gtk_container_add(GTK_CONTAINER(window), glArea);
+
+	// Show widgets
+
+	gtk_widget_show_all(window);
+	gtk_main();
+
+	return 0;
+
 }
 
-// -----------------------------------------------------------------------------
-// FUNCTION on_realize()
-// -----------------------------------------------------------------------------
-static void on_realize(GtkGLArea *area)
-{
-    // Debug message
-    g_print("Calling on_realize()... \n");
+static void on_realize(GtkGLArea *area) {
 
-    gtk_gl_area_make_current(area);
-    if(gtk_gl_area_get_error(area) != NULL)
-    {
-        fprintf(stderr, "Unknown error. \n");
-        return;
-    }
+	// Debug Message
 
-    const GLubyte *renderer = glGetString(GL_RENDERER);
-    const GLubyte *version = glGetString(GL_VERSION);
+	g_print("on realize\n");
 
-    printf("Renderer: %s\n", renderer);
-    printf("OpenGL version supported: %s\n", version); 
+	gtk_gl_area_make_current(area);
+	if(gtk_gl_area_get_error(area) != NULL) {
+		fprintf(stderr, "Unknown error\n");
+		return;
+	}
 
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+	const GLubyte *renderer = glGetString(GL_RENDER);
+	const GLubyte *version = glGetString(GL_VERSION);
+	const GLubyte *shader = glGetString(GL_SHADING_LANGUAGE_VERSION);
 
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
+	printf("Shader %s\n", shader);
+	printf("Renderer: %s\n", renderer);
+	printf("OpenGL version supported %s\n", version);
 
-    GLfloat triangle_vertices[] = {0.0, 0.8, -0.8, -0.8, 0.8, -0.8};
+	glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 
-    glGenBuffers(1, &vbo_triangle);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_triangle);
-    glBufferData(
-        GL_ARRAY_BUFFER,
-        sizeof(triangle_vertices),
-        triangle_vertices,
-        GL_STATIC_DRAW
-    );
+	glGenVertexArrays(1, &vao);
+	glBindVertexArray(vao);
 
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-    glEnableVertexAttribArray(0);
-    glDisableVertexAttribArray(0);
+	int i;
+	float angle, nextAngle;
+	int num_segments = 99;
 
-    GLint compile_ok = GL_FALSE;
-    GLint link_ok = GL_FALSE;
+	GLfloat circle_vertices[6 * 100];
+	
+	for(i = 0; i < num_segments; i++) {
 
-    const char *vs_source = 
-        "#version 120\n"
-	"attribute vec2 coord2d; \n"
-	"void main (void) {\n"
-	"	gl_Position = vec4(coord2d, 0.0, 1.0);\n"
-	"}";
+		angle = i * 2.0f * M_PI / (num_segments - 1);
+		nextAngle = (i+1) * 2.0f * M_PI / (num_segments - 1);
 
-    const char *fs_source = 
-        "#version 120\n"
-	"void main (void) {\n"
-	"	gl_FragColor[0] = 0.0;\n"
-	"	gl_FragColor[1] = 0.0;\n"
-	"	gl_FragColor[2] = 1.0;\n"
-	"}";
-    
-    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vs, 1, &vs_source, NULL);
-    glCompileShader(vs);
-    glGetShaderiv(vs, GL_COMPILE_STATUS, &compile_ok);
-    if(!compile_ok){
-        fprintf(stderr, "Error in vertex shader... \n");
-        return;
-    }
+		circle_vertices[i*6 + 0] = cos(angle) * 18;
+		circle_vertices[i*6 + 1] = sin(angle) * 18;
 
-    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fs, 1, &fs_source, NULL);
-    glCompileShader(fs);
-    glGetShaderiv(fs, GL_COMPILE_STATUS, &compile_ok);
-    if(!compile_ok){
-        fprintf(stderr, "Error in fragment shader... \n");
-        return;
-    }
+		circle_vertices[i*6 + 2] = cos(nextAngle) * 18;
+		circle_vertices[i*6 + 3] = sin(nextAngle) * 18;
 
-    program=glCreateProgram();
-    glAttachShader(program, vs);
-    glAttachShader(program, fs);
-    glLinkProgram(program);
-    glGetProgramiv(program, GL_LINK_STATUS, &link_ok);
-    if(link_ok) {
-        fprintf(stderr, "Error when linking program... \n");
-        return;
-    }
+		circle_vertices[i*6 + 4] = 0.0f;
+		circle_vertices[i*6 + 5] = 0.0f;
 
-    const char * attribute_name = "coord2d";
-    attribute_coord2d = glGetAttribLocation(program, attribute_name);
-    if(attribute_coord2d == -1)
-    {
-        fprintf(stderr, "Could not bind attribute %s\n", attribute_name);
-        return;
-    }
+	}
+
+	glGenBuffers(1, &ball.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, ball.vbo);
+	glBufferData(
+		GL_ARRAY_BUFFER,
+		sizeof(circle_vertices),
+		circle_vertices,
+		GL_STATIC_DRAW
+	);
+
+	GLfloat paddle_vertices[] = {
+		-50.0f, -7.0f,
+		-50.0f,  7.0f,
+		 50.0f,  7.0f,
+		 50.0f,  7.0f,
+		 50.0f, -7.0f,
+		-50.0f, -7.0f
+	};
+
+	glGenBuffers(1, &paddle.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, paddle.vbo);
+	glBufferData(
+		GL_ARRAY_BUFFER,
+		sizeof(paddle_vertices),
+		paddle_vertices,
+		GL_STATIC_DRAW
+	);
+
+	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
+	glEnableVertexAttribArray(0);
+	glDisableVertexAttribArray(0);
+	
+	const char *vs = "shader/vertex.glsl";
+	const char *fs = "shader/fragment.glsl";
+
+	program = shader_load_program(vs, fs);
+
+	const char *attribute_name = "coord2d";
+	attribute_coord2d = glGetAttribLocation(program, attribute_name);
+	if(attribute_coord2d == -1) {
+		fprintf(stderr, "Could not bind attribute %s\n", attribute_name);
+		return;
+	}
+
+	const char *uniform_name = "orthograph";
+	GLint uniform_ortho = glGetUniformLocation(program, uniform_name);
+	if(uniform_ortho == -1) {
+		fprintf(stderr, "Could not bind uniform %s\n", uniform_name);
+		return;
+	}
+	
+	uniform_name = "mvp";
+	uniform_mvp = glGetUniformLocation(program, uniform_name);
+	if(uniform_mvp == -1) {
+		fprintf(stderr, "Could not bind uniform %s\n", uniform_name);
+		return;
+	}
+
+	uniform_name = "color";
+	uniform_color = glGetUniformLocation(program, uniform_name);
+	if(uniform_color == -1) {
+		fprintf(stderr, "Could not bind uniform %s\n", uniform_name);
+		return;
+	}
+
+	glUseProgram(program);
+
+	mat4 orthograph;
+	mat4_orthagonal(WIDTH, HEIGHT, orthograph);
+
+	glUniformMatrix4fv(uniform_ortho, 1, GL_FALSE, orthograph);
+	g_timeout_add(20, on_idle, (void*)area);
+	
+	ball.dx = 2.0f;
+	ball.dy = 3.0f;
+	ball.pos[0] = 50.0f;
+	ball.pos[1] = 50.0f;
+	ball.pos[2] = 0.0f;
+	ball.color[0] = 0.0f;
+	ball.color[1] = 0.0f;
+	ball.color[2] = 1.0f;
+
+	paddle.dx = 2.0f;
+	paddle.pos[0] = WIDTH / 2.0f;
+	paddle.pos[1] = 20.0f;
+	paddle.pos[2] = 0.0f;
+	paddle.color[0] = 0.0f;
+	paddle.color[1] = 0.0f;
+	paddle.color[2] = 0.0f;
 }
 
-// -----------------------------------------------------------------------------
-// FUNCTION on_render
-// -----------------------------------------------------------------------------
-static void on_render(GtkGLArea *area, GdkGLContext *context)
-{
-    // Debug print
-    g_print("Calling on_render()... \n");
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glUseProgram(program);
+static void on_render(GtkGLArea *area, GdkGLContext *context) {
 
-    glBindVertexArray(vao);
-    glEnableVertexAttribArray(attribute_coord2d);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_triangle);
-    glVertexAttribPointer(attribute_coord2d, 2, GL_FLOAT, GL_FALSE, 0, 0);
+	mat4_translate(ball.pos, ball.mvp);
+	glUniformMatrix4fv(uniform_mvp, 1, GL_FALSE, ball.mvp);
+	glUniform3fv(uniform_color, 1, ball.color);
 
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glDisableVertexAttribArray(attribute_coord2d);
+	glBindVertexArray(vao);
+	glEnableVertexAttribArray(attribute_coord2d);
+
+	glBindBuffer(GL_ARRAY_BUFFER, ball.vbo);
+	glVertexAttribPointer(
+		attribute_coord2d,
+		2,
+		GL_FLOAT,
+		GL_FALSE,
+		0,
+		0
+	);
+	glDrawArrays(GL_TRIANGLES, 0, 3 * 100);
+
+	mat4_translate(paddle.pos, paddle.mvp);
+	glUniformMatrix4fv(uniform_mvp, 1, GL_FALSE, paddle.mvp);
+	glUniform3fv(uniform_color, 1, paddle.color);
+
+	glBindBuffer(GL_ARRAY_BUFFER, paddle.vbo);
+	glVertexAttribPointer(
+		attribute_coord2d,
+		2,
+		GL_FLOAT,
+		GL_FALSE,
+		0,
+		0
+	);
+	glDrawArrays(GL_TRIANGLES, 0, 3 * 2);
+	glDisableVertexAttribArray(attribute_coord2d);
+
+}
+
+static gboolean on_idle(gpointer data) {
+
+	ball.pos[0] += ball.dx;
+	ball.pos[1] += ball.dy;
+
+	if(ball.pos[0] > WIDTH) {
+		ball.pos[0] = WIDTH;
+		ball.dx *= -1;
+	} else if(ball.pos[0] < 0) {
+		ball.pos[0] = 0;
+		ball.dx *= -1;
+	}
+
+	if(ball.pos[1] > HEIGHT) {
+		ball.pos[1] = HEIGHT;
+		ball.dy *= -1;
+	} else if(ball.pos[1] < 0) {
+		ball.pos[1] = 0;
+		ball.dy *= -1;
+	}
+
+	if(paddle.key_left) {
+		paddle.pos[0] -= paddle.dx;
+	}
+
+	if(paddle.key_right) {
+		paddle.pos[0] += paddle.dx;
+	}
+
+	if(paddle.pos[0] < 0) {
+		paddle.pos[0] = 0.0f;
+	} else if(paddle.pos[0] > WIDTH) {
+		paddle.pos[0] = WIDTH;
+	}
+
+	gtk_widget_queue_draw(GTK_WIDGET(data));
+	return TRUE;
+
+}
+
+static gboolean on_keydown(GtkWidget *widget, GdkEventKey *event) {
+
+	switch(event->keyval) {
+		case GDK_KEY_Left:
+			paddle.key_left = TRUE;
+		break;
+		case GDK_KEY_Right:
+			paddle.key_right = TRUE;
+		break;
+	}
+
+}
+
+static gboolean on_keyup(GtkWidget *widget, GdkEventKey *event) {
+
+	switch(event->keyval) {
+		case GDK_KEY_Left:
+			paddle.key_left = FALSE;
+		break;
+		case GDK_KEY_Right:
+			paddle.key_right = FALSE;
+		break;
+	}
+
 }
