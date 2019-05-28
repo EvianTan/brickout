@@ -15,13 +15,17 @@ static gboolean on_keyup(GtkWidget *widget, GdkEventKey *event);
 
 struct {
 	float dx, dy;
+	float r;
 	vec3 pos;
 	vec3 color;
 	mat4 mvp;
 	GLuint vbo;
+	gboolean left, right, top, bottom;
 } ball;
 
 struct {
+	float width;
+	float height;
 	float dx;
 	vec3 pos;
 	vec3 color;
@@ -30,6 +34,16 @@ struct {
 	gboolean key_left;
 	gboolean key_right;
 } paddle;
+
+struct bricks {
+	float width;
+	float height;
+	mat4 mvp[36];
+	vec3 pos[36];
+	gboolean on[36];
+	vec3 color[6];
+	GLuint vbo;
+} bricks;
 
 GLuint program;
 GLuint vao;
@@ -97,6 +111,8 @@ static void on_realize(GtkGLArea *area) {
 	glGenVertexArrays(1, &vao);
 	glBindVertexArray(vao);
 
+	ball.r = 18.0f;
+
 	int i;
 	float angle, nextAngle;
 	int num_segments = 99;
@@ -108,11 +124,11 @@ static void on_realize(GtkGLArea *area) {
 		angle = i * 2.0f * M_PI / (num_segments - 1);
 		nextAngle = (i+1) * 2.0f * M_PI / (num_segments - 1);
 
-		circle_vertices[i*6 + 0] = cos(angle) * 18;
-		circle_vertices[i*6 + 1] = sin(angle) * 18;
+		circle_vertices[i*6 + 0] = cos(angle) * ball.r;
+		circle_vertices[i*6 + 1] = sin(angle) * ball.r;
 
-		circle_vertices[i*6 + 2] = cos(nextAngle) * 18;
-		circle_vertices[i*6 + 3] = sin(nextAngle) * 18;
+		circle_vertices[i*6 + 2] = cos(nextAngle) * ball.r;
+		circle_vertices[i*6 + 3] = sin(nextAngle) * ball.r;
 
 		circle_vertices[i*6 + 4] = 0.0f;
 		circle_vertices[i*6 + 5] = 0.0f;
@@ -128,13 +144,16 @@ static void on_realize(GtkGLArea *area) {
 		GL_STATIC_DRAW
 	);
 
+	paddle.width = 50.0f;
+	paddle.height = 10.0f;
+
 	GLfloat paddle_vertices[] = {
-		-50.0f, -7.0f,
-		-50.0f,  7.0f,
-		 50.0f,  7.0f,
-		 50.0f,  7.0f,
-		 50.0f, -7.0f,
-		-50.0f, -7.0f
+		-paddle.width, -paddle.height,
+		-paddle.width,  paddle.height,
+		 paddle.width,  paddle.height,
+		 paddle.width,  paddle.height,
+		 paddle.width, -paddle.height,
+		-paddle.width, -paddle.height
 	};
 
 	glGenBuffers(1, &paddle.vbo);
@@ -145,11 +164,29 @@ static void on_realize(GtkGLArea *area) {
 		paddle_vertices,
 		GL_STATIC_DRAW
 	);
-
-	glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-	glEnableVertexAttribArray(0);
-	glDisableVertexAttribArray(0);
 	
+	bricks.width = 51.0f;
+	bricks.height = 18.0f;
+
+	GLfloat bricks_vertices[] = {
+		-bricks.width, -bricks.height,
+		-bricks.width,  bricks.height,
+		 bricks.width,  bricks.height,
+		 bricks.width,  bricks.height,
+		 bricks.width, -bricks.height,
+		-bricks.width, -bricks.height
+	};
+
+	glGenBuffers(1, &bricks.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, bricks.vbo);
+	glBufferData(
+		GL_ARRAY_BUFFER,
+		sizeof(bricks_vertices),
+		bricks_vertices,
+		GL_STATIC_DRAW
+	);
+
+
 	const char *vs = "shader/vertex.glsl";
 	const char *fs = "shader/fragment.glsl";
 
@@ -207,6 +244,47 @@ static void on_realize(GtkGLArea *area) {
 	paddle.color[0] = 0.0f;
 	paddle.color[1] = 0.0f;
 	paddle.color[2] = 0.0f;
+
+	bricks.color[0][0] = 1.0f;
+	bricks.color[0][1] = 0.0f;
+	bricks.color[0][2] = 0.0f;
+	
+	bricks.color[1][0] = 249.0 / 255.0;
+	bricks.color[1][1] = 159.0 / 255.0;
+	bricks.color[1][2] = 2.0 / 255.0f;
+
+	bricks.color[2][0] = 1.0f;
+	bricks.color[2][1] = 1.0f;
+	bricks.color[2][2] = 0.0f;
+
+	bricks.color[3][0] = 0.0f;
+	bricks.color[3][1] = 1.0f;
+	bricks.color[3][2] = 0.0f;
+
+	bricks.color[4][0] = 0.0f;
+	bricks.color[4][1] = 0.0f;
+	bricks.color[4][2] = 1.0f;
+
+	bricks.color[5][0] = 130.0 / 255.0;
+	bricks.color[5][1] = 0.0f;
+	bricks.color[5][2] = 249.0 / 255.0;
+	
+	vec3 pos;
+	int row, col, x, y;
+	for(row = 0; row < 6; row++) {
+		for(col = 0; col < 6; col++) {
+			i = row* 6 + col;
+			x = (4.0f + bricks.width) * (1 + col) + bricks.width * col;
+			y = HEIGHT - ((4.0f + bricks.height) * (1 + row) + bricks.height * row);
+
+			bricks.pos[i][0] = (float)x;
+			bricks.pos[i][1] = (float)y;
+			bricks.pos[i][2] = 0.0f;
+			bricks.on[i] = TRUE;
+			mat4_translate(bricks.pos[i], bricks.mvp[i]);
+		}
+	}
+
 }
 
 static void on_render(GtkGLArea *area, GdkGLContext *context) {
@@ -245,11 +323,60 @@ static void on_render(GtkGLArea *area, GdkGLContext *context) {
 		0
 	);
 	glDrawArrays(GL_TRIANGLES, 0, 3 * 2);
+	
+	glBindBuffer(GL_ARRAY_BUFFER, bricks.vbo);
+	glVertexAttribPointer(
+		attribute_coord2d,
+		2,
+		GL_FLOAT,
+		GL_FALSE,
+		0,
+		0
+	);
+
+	int i, x, y;
+	for(y = 0; y < 6; y++) {
+
+		glUniform3fv(uniform_color, 1, bricks.color[y]);
+
+		for(x = 0; x < 6; x++) {
+			i = y* 6 + x;
+			
+			if(!bricks.on[i]) {
+				continue;
+			}
+
+			glUniformMatrix4fv(uniform_mvp, 1, GL_FALSE, bricks.mvp[i]);
+			glDrawArrays(GL_TRIANGLES, 0, 3 * 2);
+		}
+	}
+
 	glDisableVertexAttribArray(attribute_coord2d);
 
 }
 
 static gboolean on_idle(gpointer data) {
+
+	int i;
+
+	for(i = 0; i < 36; i++) {
+		
+		if(!bricks.on[i]) {
+			continue;
+		}
+
+		ball.left = ball.pos[0] - ball.r > bricks.pos[i][0] - bricks.width;
+		ball.right = ball.pos[0] + ball.r < bricks.pos[i][0] + bricks.width;
+
+		ball.bottom = ball.pos[1] - ball.r > bricks.pos[i][1] - bricks.width;
+		ball.top = ball.pos[1] + ball.r < bricks.pos[i][1] + bricks.width;
+
+		if(ball.left && ball.right && ball.top && ball.bottom) {
+			bricks.on[i] = FALSE;
+			ball.dy *= -1.025;
+		}
+
+	}
 
 	ball.pos[0] += ball.dx;
 	ball.pos[1] += ball.dy;
@@ -282,6 +409,15 @@ static gboolean on_idle(gpointer data) {
 		paddle.pos[0] = 0.0f;
 	} else if(paddle.pos[0] > WIDTH) {
 		paddle.pos[0] = WIDTH;
+	}
+
+	ball.left = ball.pos[0] > paddle.pos[0] - paddle.width;
+	ball.right = ball.pos[0] < paddle.pos[0] + paddle.width;
+	ball.top = ball.pos[1] < paddle.pos[1] + paddle.height;
+	ball.bottom = ball.pos[1] > paddle.pos[1] - paddle.height;
+
+	if(ball.dy < 0 && ball.left && ball.right && ball.top && ball.bottom) {
+		ball.dy *= -1.025;
 	}
 
 	gtk_widget_queue_draw(GTK_WIDGET(data));
